@@ -28,33 +28,59 @@ impl<T: fmt::Display> fmt::Display for Sensitive<T> {
     }
 }
 
+#[derive(Debug)]
 enum Notification {
     ClientConnection,
     ClientDisconnection,
     NewMessage(Vec<u8>),
 }
 
-fn server(_msg: mpsc::Receiver<Notification>) -> Result<(), ()> {
+impl fmt::Display for Notification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Notification::ClientConnection => {
+                writeln!(f, "Notification::ClientConnection")
+            }
+            Notification::ClientDisconnection => {
+                writeln!(f, "Notification::ClientDisconnection")
+            }
+            Notification::NewMessage(v) => {
+                writeln!(f, "Notifiaciton::NewMessage: {:?}", v)
+            }
+        }
+    }
+}
+
+fn server(rx: mpsc::Receiver<Notification>) -> Result<(), ()> {
     todo!()
 }
 
-fn client(mut stream: MutexGuard<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<(), ()> {
+// TODO: stream may should be MutexGuard<> or Arc<Mutex<>>
+fn client(mut stream: Arc<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<(), ()> {
     tx.send(Notification::ClientConnection).map_err(|err| {
-        eprintln!("ERROR: failed to send message to the server: {:?}", err);
+        eprintln!(
+            "ERROR: failed to send \"Notification::ClientConnection\" message to the server: {:?}",
+            err
+        );
     })?;
 
     let mut buf: Vec<u8> = Vec::new();
     buf.resize(128, 0);
 
     loop {
-        let len = stream.read(&mut buf).map_err(|_| {
-            let _ = tx.send(Notification::ClientDisconnection);
+        let len = stream.as_ref().read(&mut buf).map_err(|_| {
+            let _ = tx.send(Notification::ClientDisconnection).map_err(|err| {
+                eprintln!("ERROR: failed to send \"Notification::ClientDisconnection\" to the server: {:?}", err);
+            });
         })?;
 
         let _ = tx
             .send(Notification::NewMessage(buf[0..len].to_vec()))
             .map_err(|err| {
-                eprintln!("ERROR: failed to send message to the server: {}", err);
+                eprintln!(
+                    "ERROR: failed to send \"Notification::NewMessage\" message to the server: {}",
+                    err
+                );
             })?;
     }
 
@@ -78,13 +104,15 @@ fn main() -> Result<(), ()> {
                 Ok(stream) => {
                     let tx = tx.clone();
 
-                    let stream = Arc::new(Mutex::new(stream));
+                    // let stream = Arc::new(Mutex::new(stream));
+                    let stream = Arc::new(stream);
 
                     thread::spawn(move || {
-                        let mut stream = stream.lock().unwrap();
-                        let _ = client(stream, tx).map_err(|err|{
-                            eprintln!("ERROR: failed to {}", err);
-                        });
+                        // Mutex's lock() method returns MutexGuard,
+                        // ensuring that only one thread can access the data at a time
+                        // let mut stream = stream.lock().unwrap();
+
+                        let _ = client(stream, tx).unwrap();
                     });
                 }
 
