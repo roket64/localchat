@@ -1,7 +1,7 @@
 use core::fmt;
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
-use std::sync::{mpsc, Arc, Mutex, MutexGuard};
+use std::sync::{mpsc, Arc};
 use std::thread;
 
 const SAFE_MODE: bool = true;
@@ -52,11 +52,21 @@ impl fmt::Display for Notification {
 }
 
 fn server(rx: mpsc::Receiver<Notification>) -> Result<(), ()> {
-    todo!()
+    loop {
+        match rx.recv() {
+            Ok(msg) => {
+                println!("{}", msg);
+            }
+            Err(err) => {
+                eprintln!("ERROR: failed to receive the data from sender: {:?}", err);
+            }
+        }
+    }
+    Ok(())
 }
 
 // TODO: stream may should be MutexGuard<> or Arc<Mutex<>>
-fn client(mut stream: Arc<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<(), ()> {
+fn client(stream: Arc<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<(), ()> {
     tx.send(Notification::ClientConnection).map_err(|err| {
         eprintln!(
             "ERROR: failed to send \"Notification::ClientConnection\" message to the server: {:?}",
@@ -68,12 +78,16 @@ fn client(mut stream: Arc<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<
     buf.resize(128, 0);
 
     loop {
-        let len = stream.as_ref().read(&mut buf).map_err(|_| {
+        let len = stream.as_ref().read(&mut buf).unwrap();
+
+        if len == 0 {
             let _ = tx.send(Notification::ClientDisconnection).map_err(|err| {
                 eprintln!("ERROR: failed to send \"Notification::ClientDisconnection\" to the server: {:?}", err);
             });
-        })?;
+            break;
+        }
 
+        // handling message sending process
         let _ = tx
             .send(Notification::NewMessage(buf[0..len].to_vec()))
             .map_err(|err| {
@@ -93,7 +107,7 @@ fn main() -> Result<(), ()> {
 
         let (tx, rx) = mpsc::channel::<Notification>();
 
-        thread::spawn(|| {
+        let _ = thread::spawn(|| {
             let _ = server(rx).map_err(|err| {
                 eprintln!("ERROR: failed to establish connection to server: {:?}", err);
             });
@@ -107,7 +121,7 @@ fn main() -> Result<(), ()> {
                     // let stream = Arc::new(Mutex::new(stream));
                     let stream = Arc::new(stream);
 
-                    thread::spawn(move || {
+                    let _ = thread::spawn(move || {
                         // Mutex's lock() method returns MutexGuard,
                         // ensuring that only one thread can access the data at a time
                         // let mut stream = stream.lock().unwrap();
