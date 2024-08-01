@@ -90,7 +90,6 @@ fn run_server(rx: mpsc::Receiver<Notification>) -> Result<(), ()> {
                         "[SERVER] received `Notification::ClientConnection`:\n{:?}",
                         addr
                     );
-                    connections += 1;
                 }
 
                 Notification::ClientDisconnection(stream) => {
