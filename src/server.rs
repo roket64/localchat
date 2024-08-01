@@ -1,11 +1,19 @@
 use core::fmt;
 use std::io::Read;
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{mpsc, Arc};
 use std::thread;
 
+use chrono;
+
 const SAFE_MODE: bool = true;
-const LOCALHOST: &str = "127.0.0.1:6974";
+const LOCALHOST: &str = "127.0.0.1:8080";
+
+fn truncate_to_nonzeros(vec: &mut Vec<u8>) -> Result<Vec<u8>, ()> {
+    let len = vec.iter().position(|&x| x == 0).unwrap_or(vec.len());
+    vec.truncate(len);
+    Ok(vec.to_vec())
+}
 
 struct Sensitive<T> {
     value: T,
@@ -19,7 +27,7 @@ impl<T> Sensitive<T> {
 }
 
 impl<T: fmt::Display> fmt::Display for Sensitive<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if SAFE_MODE {
             writeln!(f, "[CENSORED]")
         } else {
@@ -32,20 +40,40 @@ impl<T: fmt::Display> fmt::Display for Sensitive<T> {
 enum Notification {
     ClientConnection(Arc<TcpStream>),
     ClientDisconnection(Arc<TcpStream>),
-    NewMessage(Vec<u8>),
+    NewMessage(ClientMessage),
+}
+
+#[derive(Debug)]
+struct ClientMessage {
+    author: Arc<SocketAddr>,
+    date: chrono::DateTime<chrono::Utc>,
+    msg: Vec<u8>,
+}
+
+impl fmt::Display for ClientMessage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(
+            f,
+            "author: {:?}\ndate: {:?}\nmsg: {:?}",
+            self.author, self.date, self.msg
+        )
+    }
 }
 
 impl fmt::Display for Notification {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Notification::ClientConnection(_) => {
-                writeln!(f, "Notification::ClientConnection")
+            // using debug for now
+            Notification::ClientConnection(client) => {
+                writeln!(f, "Notification::ClientConnection: {:?}", client)
             }
-            Notification::ClientDisconnection(_) => {
-                writeln!(f, "Notification::ClientDisconnection")
+
+            Notification::ClientDisconnection(client) => {
+                writeln!(f, "Notification::ClientDisconnection: {:?}", client)
             }
-            Notification::NewMessage(v) => {
-                writeln!(f, "Notifiaciton::NewMessage: {:?}", v)
+
+            Notification::NewMessage(msg) => {
+                writeln!(f, "Notifiaciton::NewMessage: {}", msg)
             }
         }
     }
@@ -59,31 +87,27 @@ fn run_server(rx: mpsc::Receiver<Notification>) -> Result<(), ()> {
                 Notification::ClientConnection(stream) => {
                     let addr = stream.peer_addr().unwrap();
                     println!(
-                        "[SERVER] received \'Notification::ClientConnection\': {:?}",
+                        "[SERVER] received `Notification::ClientConnection`:\n{:?}",
                         addr
                     );
+                    connections += 1;
                 }
+
                 Notification::ClientDisconnection(stream) => {
                     let addr = stream.peer_addr().unwrap();
                     println!(
-                        "[SERVER] received \'Notification::ClientDisconnection\': {:?}",
+                        "[SERVER] received `Notification::ClientDisconnection`:\n{:?}",
                         addr
                     );
                 }
-                Notification::NewMessage(v) => {
-                    println!("[SERVER] received \'Notification::NewMessage\': {:?}", v);
+
+                Notification::NewMessage(msg) => {
+                    println!("[SERVER] received `Notification::NewMessage`:\n{}", msg);
                 }
             },
+
             Err(err) => {
                 eprintln!("ERROR: failed to receive data from the sender: {}", err);
-                // match kind {
-                //     mpsc::TryRecvError::Empty => {
-                //         eprintln!("ERROR: failed to receive data from the sender; channel is currently empty");
-                //     }
-                //     mpsc::TryRecvError::Disconnected => {
-                //         eprintln!("ERROR: failed to receive data from the sender; the sender is disconnected");
-                //     }
-                // }
             }
         }
     }
@@ -95,33 +119,39 @@ fn run_client(stream: Arc<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<
     tx.send(Notification::ClientConnection(stream.clone()))
         .map_err(|err| {
             eprintln!(
-            "ERROR: failed to send \'Notification::ClientConnection\' message to the server: {:?}",
+            "ERROR: failed to send `Notification::ClientConnection` message to the server: {:?}",
             err
         );
         })?;
 
-    let mut buf: Vec<u8> = Vec::new();
-    buf.resize(128, 0);
+    // let mut buf: Vec<u8> = Vec::new();
+    // buf.resize(128, 0);
+    let mut buf = [0; 1024];
 
     loop {
         let len = stream.as_ref().read(&mut buf).unwrap();
 
         if len == 0 {
             let _ = tx.send(Notification::ClientDisconnection(stream.clone())).map_err(|err| {
-                eprintln!("ERROR: failed to send \'Notification::ClientDisconnection\' to the server: {:?}", err);
+                eprintln!("ERROR: failed to send `Notification::ClientDisconnection` to the server: {:?}", err);
             });
             break;
         }
 
-        // handling message sending process
-        let _ = tx
-            .send(Notification::NewMessage(buf[0..len].to_vec()))
-            .map_err(|err| {
-                eprintln!(
-                    "ERROR: failed to send \'Notification::NewMessage\' message to the server: {}",
-                    err
-                );
-            })?;
+        let client_message = ClientMessage {
+            author: Arc::new(stream.peer_addr().unwrap()),
+            date: chrono::offset::Utc::now(),
+            msg: truncate_to_nonzeros(&mut buf.clone().to_vec()).unwrap(),
+        };
+
+        let new_message = Notification::NewMessage(client_message);
+
+        let _ = tx.send(new_message).map_err(|err| {
+            eprintln!(
+                "ERROR: failed to send `Notification::NewMessage` message to the server: {}",
+                err
+            );
+        })?;
     }
 
     Ok(())
