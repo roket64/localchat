@@ -1,7 +1,10 @@
 use core::fmt;
 use std::io::Read;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{mpsc, Arc};
+use std::sync::{
+    mpsc::{channel, Receiver, Sender},
+    Arc, Mutex,
+};
 use std::thread;
 
 use chrono;
@@ -79,7 +82,7 @@ impl fmt::Display for Notification {
     }
 }
 
-fn run_server(rx: mpsc::Receiver<Notification>) -> Result<(), ()> {
+fn run_server(rx: Receiver<Notification>) -> Result<(), ()> {
     loop {
         let inner = rx.recv();
         match inner {
@@ -113,7 +116,7 @@ fn run_server(rx: mpsc::Receiver<Notification>) -> Result<(), ()> {
     Ok(())
 }
 
-fn run_client(stream: Arc<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<(), ()> {
+fn run_client(stream: Arc<TcpStream>, tx: Sender<Notification>) -> Result<(), ()> {
     let _ = tx
         .send(Notification::ClientConnection(stream.clone()))
         .unwrap();
@@ -121,6 +124,7 @@ fn run_client(stream: Arc<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<
     let mut buf = [0; 1024];
 
     loop {
+        // manipulating stream
         match stream.as_ref().read(&mut buf) {
             Ok(0) => {
                 let _ = tx
@@ -142,6 +146,7 @@ fn run_client(stream: Arc<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<
 
             Err(err) => {
                 eprintln!("ERROR: failed to read stream: {:?}", err);
+                return Err(());
             }
         }
     }
@@ -153,28 +158,26 @@ fn main() -> Result<(), ()> {
     if let Ok(connection) = TcpListener::bind(LOCALHOST) {
         println!("connection established to {}", LOCALHOST);
 
-        let (tx, rx) = mpsc::channel::<Notification>();
+        let (tx, rx) = channel::<Notification>();
+
+        // all client thrad must reference this
+        let tx = Arc::new(Mutex::new(tx));
 
         let _ = thread::spawn(|| {
-            let _ = run_server(rx).map_err(|err| {
-                eprintln!("ERROR: failed to establish connection to server: {:?}", err);
-            });
+            let _ = run_server(rx).unwrap();
         });
 
-        for stream in connection.incoming() {
+        for (_, stream) in connection.incoming().enumerate() {
             match stream {
                 Ok(stream) => {
-                    let tx = tx.clone();
-
+                    // TODO: should stream be wrapped like this?
                     // let stream = Arc::new(Mutex::new(stream));
+
                     let stream = Arc::new(stream);
 
+                    let tx = Arc::clone(&tx);
                     let _ = thread::spawn(move || {
-                        // Mutex's lock() method returns MutexGuard,
-                        // ensuring that only one thread can access the data at a time
-                        // let mut stream = stream.lock().unwrap();
-
-                        let _ = run_client(stream, tx).unwrap();
+                        let _ = run_client(stream, tx.lock().unwrap().clone());
                     });
                 }
 
