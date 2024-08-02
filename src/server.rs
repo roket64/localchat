@@ -113,44 +113,37 @@ fn run_server(rx: mpsc::Receiver<Notification>) -> Result<(), ()> {
     Ok(())
 }
 
-// TODO: stream may should be MutexGuard<> or Arc<Mutex<>>
 fn run_client(stream: Arc<TcpStream>, tx: mpsc::Sender<Notification>) -> Result<(), ()> {
-    tx.send(Notification::ClientConnection(stream.clone()))
-        .map_err(|err| {
-            eprintln!(
-            "ERROR: failed to send `Notification::ClientConnection` message to the server: {:?}",
-            err
-        );
-        })?;
+    let _ = tx
+        .send(Notification::ClientConnection(stream.clone()))
+        .unwrap();
 
-    // let mut buf: Vec<u8> = Vec::new();
-    // buf.resize(128, 0);
     let mut buf = [0; 1024];
 
     loop {
-        let len = stream.as_ref().read(&mut buf).unwrap();
+        match stream.as_ref().read(&mut buf) {
+            Ok(0) => {
+                let _ = tx
+                    .send(Notification::ClientConnection(stream.clone()))
+                    .unwrap();
+                break;
+            }
 
-        if len == 0 {
-            let _ = tx.send(Notification::ClientDisconnection(stream.clone())).map_err(|err| {
-                eprintln!("ERROR: failed to send `Notification::ClientDisconnection` to the server: {:?}", err);
-            });
-            break;
+            Ok(_) => {
+                let client_message = ClientMessage {
+                    author: Arc::new(stream.peer_addr().unwrap()),
+                    date: chrono::offset::Utc::now(),
+                    msg: truncate_to_nonzeros(&mut buf.clone().to_vec()).unwrap(),
+                };
+
+                let new_message = Notification::NewMessage(client_message);
+                let _ = tx.send(new_message).unwrap();
+            }
+
+            Err(err) => {
+                eprintln!("ERROR: failed to read stream: {:?}", err);
+            }
         }
-
-        let client_message = ClientMessage {
-            author: Arc::new(stream.peer_addr().unwrap()),
-            date: chrono::offset::Utc::now(),
-            msg: truncate_to_nonzeros(&mut buf.clone().to_vec()).unwrap(),
-        };
-
-        let new_message = Notification::NewMessage(client_message);
-
-        let _ = tx.send(new_message).map_err(|err| {
-            eprintln!(
-                "ERROR: failed to send `Notification::NewMessage` message to the server: {}",
-                err
-            );
-        })?;
     }
 
     Ok(())
