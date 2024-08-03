@@ -5,18 +5,12 @@ use std::sync::{
     mpsc::{channel, Receiver, Sender},
     Arc, Mutex,
 };
-use std::thread;
+use std::{str, thread};
 
 use chrono;
 
 const SAFE_MODE: bool = true;
 const LOCALHOST: &str = "127.0.0.1:8080";
-
-fn truncate_to_nonzeros(vec: &mut Vec<u8>) -> Result<Vec<u8>, ()> {
-    let len = vec.iter().position(|&x| x == 0).unwrap_or(vec.len());
-    vec.truncate(len);
-    Ok(vec.to_vec())
-}
 
 struct Sensitive<T> {
     value: T,
@@ -50,7 +44,7 @@ enum Notification {
 struct ClientMessage {
     author: Arc<SocketAddr>,
     date: chrono::DateTime<chrono::Utc>,
-    msg: Vec<u8>,
+    msg: String,
 }
 
 impl fmt::Display for ClientMessage {
@@ -133,15 +127,14 @@ fn run_client(stream: Arc<TcpStream>, tx: Sender<Notification>) -> Result<(), ()
                 break;
             }
 
-            Ok(_) => {
+            Ok(n) => {
                 let client_message = ClientMessage {
                     author: Arc::new(stream.peer_addr().unwrap()),
                     date: chrono::offset::Utc::now(),
-                    msg: truncate_to_nonzeros(&mut buf.clone().to_vec()).unwrap(),
+                    msg: String::from_utf8_lossy(&buf[..n]).to_string(),
                 };
 
-                let new_message = Notification::NewMessage(client_message);
-                let _ = tx.send(new_message).unwrap();
+                let _ = tx.send(Notification::NewMessage(client_message)).unwrap();
             }
 
             Err(err) => {
@@ -177,7 +170,8 @@ fn main() -> Result<(), ()> {
 
                     let tx = Arc::clone(&tx);
                     let _ = thread::spawn(move || {
-                        let _ = run_client(stream, tx.lock().unwrap().clone());
+                        let locked = tx.lock().unwrap().clone();
+                        let _ = run_client(stream, locked);
                     });
                 }
 
