@@ -8,6 +8,7 @@ use std::sync::{
 use std::{str, thread};
 
 use chrono;
+use threadpool::ThreadPool;
 
 const SAFE_MODE: bool = true;
 const LOCALHOST: &str = "127.0.0.1:8080";
@@ -160,6 +161,8 @@ fn main() -> Result<(), ()> {
             let _ = run_server(rx).unwrap();
         });
 
+        let pool = ThreadPool::new(4);
+
         for (_, stream) in connection.incoming().enumerate() {
             match stream {
                 Ok(stream) => {
@@ -169,7 +172,7 @@ fn main() -> Result<(), ()> {
                     let stream = Arc::new(stream);
 
                     let tx = Arc::clone(&tx);
-                    let _ = thread::spawn(move || {
+                    let _ = pool.execute(move || {
                         let locked = tx.lock().unwrap().clone();
                         let _ = run_client(stream, locked);
                     });
