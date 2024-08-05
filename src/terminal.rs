@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-fn main() -> io::Result<()> {
+fn run_terminal() -> io::Result<()> {
     terminal::enable_raw_mode()?;
     let mut run = true;
 

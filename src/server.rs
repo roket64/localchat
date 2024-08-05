@@ -77,7 +77,7 @@ impl fmt::Display for Notification {
     }
 }
 
-fn run_server(rx: Receiver<Notification>) -> Result<(), ()> {
+fn handle_connection(rx: Receiver<Notification>) -> Result<(), ()> {
     loop {
         let inner = rx.recv();
         match inner {
@@ -123,7 +123,7 @@ fn run_client(stream: Arc<TcpStream>, tx: Sender<Notification>) -> Result<(), ()
         match stream.as_ref().read(&mut buf) {
             Ok(0) => {
                 let _ = tx
-                    .send(Notification::ClientConnection(stream.clone()))
+                    .send(Notification::ClientDisconnection(stream.clone()))
                     .unwrap();
                 break;
             }
@@ -148,7 +148,7 @@ fn run_client(stream: Arc<TcpStream>, tx: Sender<Notification>) -> Result<(), ()
     Ok(())
 }
 
-fn main() -> Result<(), ()> {
+pub fn run_server() -> Result<(), ()> {
     if let Ok(connection) = TcpListener::bind(LOCALHOST) {
         println!("connection established to {}", LOCALHOST);
 
@@ -157,8 +157,8 @@ fn main() -> Result<(), ()> {
         // all client thrad must reference this
         let tx = Arc::new(Mutex::new(tx));
 
-        let _ = thread::spawn(|| {
-            let _ = run_server(rx).unwrap();
+        let server = thread::spawn(|| {
+            let _ = handle_connection(rx).unwrap();
         });
 
         let pool = ThreadPool::new(4);
@@ -184,6 +184,8 @@ fn main() -> Result<(), ()> {
                 }
             }
         }
+
+        server.join().unwrap();
     } else {
         eprintln!("ERROR: failed to establish connection to {}", LOCALHOST);
         return Err(());
