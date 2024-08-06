@@ -96,6 +96,7 @@ fn handle_connection(rx: Receiver<Notification>) -> Result<(), ()> {
                         "[SERVER] received `Notification::ClientDisconnection`:\n{:?}",
                         addr
                     );
+                    break;
                 }
 
                 Notification::NewMessage(msg) => {
@@ -105,6 +106,7 @@ fn handle_connection(rx: Receiver<Notification>) -> Result<(), ()> {
 
             Err(err) => {
                 eprintln!("ERROR: failed to receive data from the sender: {}", err);
+                return Err(());
             }
         }
     }
