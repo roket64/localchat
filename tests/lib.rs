@@ -1,8 +1,6 @@
-use std::env::join_paths;
 use std::io::Write;
 use std::net;
 use std::thread;
-use std::time;
 
 use localchat::server;
 
