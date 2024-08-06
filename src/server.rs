@@ -36,8 +36,8 @@ impl<T: fmt::Display> fmt::Display for Sensitive<T> {
 
 #[derive(Debug)]
 enum Notification {
-    ClientConnection(Arc<TcpStream>),
-    ClientDisconnection(Arc<TcpStream>),
+    ClientConnection(Arc<SocketAddr>),
+    ClientDisconnection(Arc<SocketAddr>),
     NewMessage(ClientMessage),
 }
 
@@ -79,60 +79,52 @@ impl fmt::Display for Notification {
 
 fn handle_connection(rx: Receiver<Notification>) -> Result<(), ()> {
     loop {
-        let inner = rx.recv();
+        let inner = rx.recv().unwrap();
         match inner {
-            Ok(kind) => match kind {
-                Notification::ClientConnection(stream) => {
-                    let addr = stream.peer_addr().unwrap();
-                    println!(
-                        "[SERVER] received `Notification::ClientConnection`:\n{:?}",
-                        addr
-                    );
-                }
+            Notification::ClientConnection(addr) => {
+                println!(
+                    "[SERVER] received `Notification::ClientConnection`:\n{:?}",
+                    addr
+                );
+            }
 
-                Notification::ClientDisconnection(stream) => {
-                    let addr = stream.peer_addr().unwrap();
-                    println!(
-                        "[SERVER] received `Notification::ClientDisconnection`:\n{:?}",
-                        addr
-                    );
-                    break;
-                }
+            Notification::ClientDisconnection(addr) => {
+                println!(
+                    "[SERVER] received `Notification::ClientDisconnection`:\n{:?}",
+                    addr
+                );
+                break;
+            }
 
-                Notification::NewMessage(msg) => {
-                    println!("[SERVER] received `Notification::NewMessage`:\n{}", msg);
-                }
-            },
-
-            Err(err) => {
-                eprintln!("ERROR: failed to receive data from the sender: {}", err);
-                return Err(());
+            Notification::NewMessage(msg) => {
+                println!("[SERVER] received `Notification::NewMessage`:\n{}", msg);
             }
         }
     }
     Ok(())
 }
 
-fn run_client(stream: Arc<TcpStream>, tx: Sender<Notification>) -> Result<(), ()> {
+fn run_client(mut stream: TcpStream, tx: Sender<Notification>) -> Result<(), ()> {
+    let arc_addr = Arc::new(stream.peer_addr().unwrap());
     let _ = tx
-        .send(Notification::ClientConnection(stream.clone()))
+        .send(Notification::ClientConnection(arc_addr.clone()))
         .unwrap();
 
     let mut buf = [0; 1024];
 
     loop {
         // manipulating stream
-        match stream.as_ref().read(&mut buf) {
+        match stream.read(&mut buf) {
             Ok(0) => {
                 let _ = tx
-                    .send(Notification::ClientDisconnection(stream.clone()))
+                    .send(Notification::ClientDisconnection(arc_addr.clone()))
                     .unwrap();
                 break;
             }
 
             Ok(n) => {
                 let client_message = ClientMessage {
-                    author: Arc::new(stream.peer_addr().unwrap()),
+                    author: arc_addr.clone(),
                     date: chrono::offset::Utc::now(),
                     msg: String::from_utf8_lossy(&buf[..n]).to_string(),
                 };
@@ -169,14 +161,15 @@ pub fn run_server() -> Result<(), ()> {
             match stream {
                 Ok(stream) => {
                     // TODO: should stream be wrapped like this?
-                    // let stream = Arc::new(Mutex::new(stream));
+                    let stream = Arc::new(Mutex::new(stream));
 
-                    let stream = Arc::new(stream);
+                    // let stream = Arc::new(stream);
 
                     let tx = Arc::clone(&tx);
                     let _ = pool.execute(move || {
-                        let locked = tx.lock().unwrap().clone();
-                        let _ = run_client(stream, locked);
+                        let locked_stream = stream.lock().unwrap().try_clone().unwrap();
+                        let locked_sender = tx.lock().unwrap().clone();
+                        let _ = run_client(locked_stream, locked_sender);
                     });
                 }
 
