@@ -93,7 +93,6 @@ fn handle_connection(rx: Receiver<Notification>) -> Result<(), ()> {
                     "[SERVER] received `Notification::ClientDisconnection`:\n{:?}",
                     addr
                 );
-                break;
             }
 
             Notification::NewMessage(msg) => {
